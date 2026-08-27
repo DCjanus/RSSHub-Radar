@@ -29,6 +29,8 @@ jobs:
         with:
           node-version: 22.x
           cache: "pnpm"
+      - name: Run tests
+        run: pnpm test
       - name: Package the extension for Chrome
         run: pnpm zip
       - name: Package the extension for Firefox
