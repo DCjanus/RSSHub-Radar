@@ -2,6 +2,7 @@ import RouteRecognizer from "route-recognizer"
 import { parse } from "tldts"
 
 import { parseRules } from "./rules"
+import { matchSource, mergeSourceParams } from "./source-matcher"
 import type { RSSData, Rule } from "./types"
 
 function getRuleDocsUrl(rule: Rule) {
@@ -15,7 +16,15 @@ function getRuleDocsUrl(rule: Rule) {
   return rule.docs
 }
 
-function ruleHandler(rule: Rule, params, url, html, success, fail) {
+function ruleHandler(
+  rule: Rule,
+  params,
+  queryCaptures: Record<string, string>,
+  url,
+  html,
+  success,
+  fail,
+) {
   const run = () => {
     let resultWithParams
     if (typeof rule.target === "function") {
@@ -53,7 +62,11 @@ function ruleHandler(rule: Rule, params, url, html, success, fail) {
           const regex = new RegExp(`/:${param.name}\\??(?=/|$)`)
           resultWithParams = resultWithParams.replace(
             regex,
-            `/${params[param.name]}`,
+            `/${
+              Object.hasOwn(queryCaptures, param.name)
+                ? encodeURIComponent(params[param.name])
+                : params[param.name]
+            }`,
           )
         } else if (param.optional) {
           // missing optional parameter, drop all following parameters, otherwise the route will be invalid
@@ -105,9 +118,11 @@ export function getPageRSSHub(data: {
   const { url, html } = data
   const rules = parseRules(data.rules)
 
+  let pageUrl
   let parsedDomain
   try {
-    parsedDomain = parse(new URL(url).hostname)
+    pageUrl = new URL(url)
+    parsedDomain = parse(pageUrl.hostname)
   } catch (error) {
     return []
   }
@@ -132,43 +147,45 @@ export function getPageRSSHub(data: {
               : typeof ru.source === "string"
                 ? [ru.source]
                 : []
-          let sources = []
-          // route-recognizer do not support optional segments or partial matching
-          // thus, we need to manually handle it
-          // allowing partial matching is necessary, since many rule authors did not mark optional segments
-          oriSources.forEach((source) => {
-            // trimming `?` is necessary, since route-recognizer considers it as a part of segment
-            source = source.replace(/(\/:\w+)\?(?=\/|$)/g, "$1")
-            sources.push(source)
-            let tailMatch
-            do {
-              tailMatch = source.match(/\/:\w+$/)
-              if (tailMatch) {
-                const tail = tailMatch[0]
-                source = source.slice(0, source.length - tail.length)
-                sources.push(source)
-              }
-            } while (tailMatch)
-          })
-          // deduplicate (some rule authors may already have done similar job)
-          sources = sources.filter(
-            (item, index) => sources.indexOf(item) === index,
-          )
+          const seenSourceCandidates = new Set<string>()
           // match!
-          sources.forEach((source) => {
-            const router = new RouteRecognizer()
-            router.add([
-              {
-                path: source,
-                handler: index,
-              },
-            ])
-            const result = router.recognize(
-              new URL(url).pathname.replace(/\/$/, ""),
-            )
-            if (result && result[0]) {
-              recognized.push(result[0])
+          oriSources.forEach((source) => {
+            const sourceMatch = matchSource(source, pageUrl)
+            if (!sourceMatch) {
+              return
             }
+
+            sourceMatch.paths.forEach((path) => {
+              const candidateKey = JSON.stringify([path, sourceMatch.queryKey])
+              if (seenSourceCandidates.has(candidateKey)) {
+                return
+              }
+              seenSourceCandidates.add(candidateKey)
+
+              const router = new RouteRecognizer()
+              router.add([
+                {
+                  path,
+                  handler: index,
+                },
+              ])
+              const result = router.recognize(
+                pageUrl.pathname.replace(/\/$/, ""),
+              )
+              if (result && result[0]) {
+                const params = mergeSourceParams(
+                  result[0].params,
+                  sourceMatch.queryCaptures,
+                )
+                if (params) {
+                  recognized.push({
+                    ...result[0],
+                    params,
+                    queryCaptures: sourceMatch.queryCaptures,
+                  })
+                }
+              }
+            })
           })
         })
         const result: RSSData[] = []
@@ -179,6 +196,7 @@ export function getPageRSSHub(data: {
                 ruleHandler(
                   rule[recog.handler],
                   recog.params,
+                  recog.queryCaptures,
                   url,
                   html,
                   (parsed) => {
