@@ -2,6 +2,7 @@ export type Rule = {
   title: string
   docs: string
   source: string[]
+  /** Function targets receive decoded params and must encode values used in the returned URL. */
   target: string | ((params: any, url: string) => string)
 }
 
