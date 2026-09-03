@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { matchSource, mergeSourceParams } from "./source-matcher"
 
@@ -55,6 +55,24 @@ describe("matchSource", () => {
       false,
     ],
     [
+      "rejects repeated query placeholder names",
+      "/foo?a=:id&b=:id",
+      "/foo?a=1&b=1",
+      false,
+    ],
+    [
+      "rejects repeated pathname placeholder names",
+      "/foo/:id/:id",
+      "/foo/1/1",
+      false,
+    ],
+    [
+      "rejects placeholder names shared by pathname and query",
+      "/user/:id?uid=:id",
+      "/user/123?uid=123",
+      false,
+    ],
+    [
       "rejects query-aware source rules with fragments",
       "/foo?type=season#tab-a",
       "/foo?type=season#tab-a",
@@ -75,22 +93,19 @@ describe("matchSource", () => {
     expect(match?.queryCaptures).toEqual({ keyword: "hello/世界" })
   })
 
-  it("accepts identical values captured by the same query placeholder", () => {
-    const match = matchSource(
-      "/foo?a=:id&b=:id",
-      new URL("https://example.com/foo?a=1&b=1"),
+  it("warns once for a source with duplicate placeholder names", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const source = "/warning/:id?uid=:id"
+    const page = new URL("https://example.com/warning/1?uid=1")
+
+    matchSource(source, page)
+    matchSource(source, page)
+
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(
+      `Invalid Radar source "${source}": duplicate placeholder "id"`,
     )
-
-    expect(match?.queryCaptures).toEqual({ id: "1" })
-  })
-
-  it("rejects conflicting values captured by the same query placeholder", () => {
-    expect(
-      matchSource(
-        "/foo?a=:id&b=:id",
-        new URL("https://example.com/foo?a=1&b=2"),
-      ),
-    ).toBeNull()
+    warn.mockRestore()
   })
 
   it.each(["constructor", "toString", "__proto__"])(
@@ -144,25 +159,7 @@ describe("matchSource", () => {
 })
 
 describe("mergeSourceParams", () => {
-  it("accepts an identical pathname and query capture", () => {
-    const sourceMatch = matchSource(
-      "/user/:id?uid=:id",
-      new URL("https://example.com/user/123?uid=123"),
-    )
-
-    expect(
-      mergeSourceParams({ id: "123" }, sourceMatch!.queryCaptures),
-    ).toEqual({ id: "123" })
-  })
-
-  it("rejects conflicting pathname and query captures", () => {
-    const sourceMatch = matchSource(
-      "/user/:id?uid=:id",
-      new URL("https://example.com/user/123?uid=456"),
-    )
-
-    expect(
-      mergeSourceParams({ id: "123" }, sourceMatch!.queryCaptures),
-    ).toBeNull()
+  it("rejects overlapping pathname and query capture names", () => {
+    expect(mergeSourceParams({ id: "123" }, { id: "123" })).toBeNull()
   })
 })

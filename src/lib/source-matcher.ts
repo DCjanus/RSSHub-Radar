@@ -4,6 +4,18 @@ export type SourceMatch = {
   queryCaptures: Record<string, string>
 }
 
+const warnedInvalidSources = new Set<string>()
+
+function warnDuplicatePlaceholder(source: string, paramName: string) {
+  if (warnedInvalidSources.has(source)) {
+    return
+  }
+  warnedInvalidSources.add(source)
+  console.warn(
+    `Invalid Radar source "${source}": duplicate placeholder "${paramName}"`,
+  )
+}
+
 export function matchSource(source: string, url: URL): SourceMatch | null {
   // route-recognizer does not support optional segments, so normalize the
   // source syntax before handing it to the URL parser.
@@ -18,6 +30,16 @@ export function matchSource(source: string, url: URL): SourceMatch | null {
   if (sourceUrl.search && sourceUrl.hash) {
     return null
   }
+  const placeholderNames = new Set<string>()
+  for (const match of sourceUrl.pathname.matchAll(/\/:(\w+)/g)) {
+    const paramName = match[1]
+    if (placeholderNames.has(paramName)) {
+      warnDuplicatePlaceholder(source, paramName)
+      return null
+    }
+    placeholderNames.add(paramName)
+  }
+
   const queryCaptures: Record<string, string> = Object.create(null)
   const queryKeys = new Set<string>()
 
@@ -39,12 +61,11 @@ export function matchSource(source: string, url: URL): SourceMatch | null {
       if (!value) {
         return null
       }
-      if (
-        Object.hasOwn(queryCaptures, paramName) &&
-        queryCaptures[paramName] !== value
-      ) {
+      if (placeholderNames.has(paramName)) {
+        warnDuplicatePlaceholder(source, paramName)
         return null
       }
+      placeholderNames.add(paramName)
       queryCaptures[paramName] = value
     } else if (actualValues[0] !== expectedValue) {
       return null
@@ -78,8 +99,8 @@ export function mergeSourceParams(
   pathParams: Record<string, unknown>,
   queryCaptures: Record<string, string>,
 ): Record<string, unknown> | null {
-  for (const [name, value] of Object.entries(queryCaptures)) {
-    if (Object.hasOwn(pathParams, name) && pathParams[name] !== value) {
+  for (const name of Object.keys(queryCaptures)) {
+    if (Object.hasOwn(pathParams, name)) {
       return null
     }
   }
